@@ -1,0 +1,74 @@
+---
+openapi: 3.1.0
+components:
+  schemas:
+    Fruit:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+paths:
+  /fruits:
+    get:
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                uniqueItems: true
+                items:
+                  $ref: "#/components/schemas/Fruit"
+      summary: List
+      tags:
+      - Fruit Resource
+    delete:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Fruit"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                uniqueItems: true
+                items:
+                  $ref: "#/components/schemas/Fruit"
+      summary: Delete
+      tags:
+      - Fruit Resource
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Fruit"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                uniqueItems: true
+                items:
+                  $ref: "#/components/schemas/Fruit"
+        "400":
+          description: Bad Request
+      summary: Add
+      tags:
+      - Fruit Resource
+info:
+  title: openapi-swaggerui-quickstart API
+  version: 1.0.0-SNAPSHOT
+servers:
+  - url: https://843c-213-172-149-192.ngrok-free.app
