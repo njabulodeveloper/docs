@@ -1,74 +1,1187 @@
----
 openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: Loyalty Rewards Platform API
+  version: 1.0.0
+  summary: Unified API contract across ledger, vouchers, engagement rules, gamification, and webhook connectivity.
+  description: |
+    This contract documents the current platform API surface implemented across multiple services.
+
+    Service deployment notes:
+    - `ledger-service` and `gamification-service` run with `/api` root path in local Docker Compose.
+    - `engagement-engine-processor` routes are exposed without `/api` prefix.
+    - Voucher lifecycle endpoints currently live inside `ledger-service`.
+servers:
+  - url: http://localhost:8083/api
+    description: Ledger + Voucher API (local)
+  - url: http://localhost:8084/api
+    description: Gamification API (local)
+  - url: http://localhost:8086
+    description: Engagement/Rule API (local)
+  - url: http://notification-service:8080
+    description: Notification/Webhook API (internal network)
+tags:
+  - name: Ledger
+    description: Point ledger transactions, balances, and exchange rates.
+  - name: Vouchers
+    description: Voucher lifecycle state machine.
+  - name: Gamification
+    description: Missions and streak progress APIs.
+  - name: Rules
+    description: Rule evaluation and transaction simulation APIs.
+  - name: Webhooks
+    description: Webhook subscription management.
+  - name: Admin
+    description: Schema and platform administration APIs.
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+paths:
+  /v1/ledger/earn:
+    post:
+      tags: [Ledger]
+      summary: Credit points or credits to a user ledger
+      operationId: earnPoints
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LedgerRequest'
+            example:
+              userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+              amount: 100
+              currencyCode: "PTS"
+              metadata:
+                source: "order"
+                order_id: "ORD-1001"
+              expiryDate: "2026-12-31T23:59:59Z"
+      responses:
+        '201':
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerTransaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/ledger/redeem:
+    post:
+      tags: [Ledger]
+      summary: Debit points or credits from a user ledger
+      operationId: redeemPoints
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LedgerRequest'
+            example:
+              userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+              amount: 40
+              currencyCode: "PTS"
+              metadata:
+                reason: "checkout-redemption"
+                checkout_id: "CHK-822"
+      responses:
+        '201':
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerTransaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Idempotency in-progress or insufficient state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "CONFLICT"
+                message: "Request already in progress"
+                status: 409
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/ledger/transactions/{userId}:
+    get:
+      tags: [Ledger]
+      summary: List user ledger transactions
+      operationId: listLedgerTransactions
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transactions list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerTransaction'
+              example:
+                - id: "95a8fcc5-4c57-46e1-a856-e621bcb53a75"
+                  tenantId: "tenant-alpha"
+                  userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+                  amount: 100
+                  currencyCode: "PTS"
+                  transactionType: "EARN"
+                  metadataJson: "{\"order_id\":\"ORD-1001\"}"
+                  createdAt: "2026-02-20T08:41:00Z"
+                  expiryDate: "2026-12-31T23:59:59Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/exchange-rates:
+    post:
+      tags: [Ledger]
+      summary: Create or update tenant currency conversion rate
+      operationId: upsertExchangeRate
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExchangeRateUpsertRequest'
+            example:
+              from_currency: "PTS"
+              to_currency: "USD_CREDIT"
+              rate: 0.01
+      responses:
+        '204':
+          description: Rate upserted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    get:
+      tags: [Ledger]
+      summary: List tenant exchange rates
+      operationId: listExchangeRates
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+      responses:
+        '200':
+          description: Exchange rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+              example:
+                - "PTS->USD_CREDIT:0.01"
+                - "STARS->PTS:10.0"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/vouchers:
+    post:
+      tags: [Vouchers]
+      summary: Create a voucher
+      operationId: createVoucher
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoucherCreateRequest'
+            example:
+              code: "WELCOME-2026"
+              currencyCode: "PTS"
+              amount: 250
+              expiryDate: "2026-12-31T23:59:59Z"
+      responses:
+        '201':
+          description: Voucher created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Voucher'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Voucher code already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "CONFLICT"
+                message: "Voucher already exists"
+                status: 409
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/vouchers/{code}/reserve:
+    post:
+      tags: [Vouchers]
+      summary: Reserve voucher for a user with TTL lock
+      operationId: reserveVoucher
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoucherReservationRequest'
+            example:
+              userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+      responses:
+        '200':
+          description: Voucher reserved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoucherReservationResponse'
+              example:
+                code: "WELCOME-2026"
+                reserved_until: "2026-02-20T09:20:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Voucher is already reserved, redeemed, expired, or voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/vouchers/{code}/redeem:
+    post:
+      tags: [Vouchers]
+      summary: Atomically redeem a reserved voucher
+      operationId: redeemVoucher
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoucherReservationRequest'
+            example:
+              userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+      responses:
+        '200':
+          description: Voucher redeemed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoucherStateResponse'
+              example:
+                code: "WELCOME-2026"
+                state: "REDEEMED"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Voucher not reserved, expired, or not redeemable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/vouchers/{code}/void:
+    post:
+      tags: [Vouchers]
+      summary: Void a voucher permanently
+      operationId: voidVoucher
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyRequired'
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Voucher voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoucherStateResponse'
+              example:
+                code: "WELCOME-2026"
+                state: "VOIDED"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/rules/evaluate:
+    post:
+      tags: [Rules]
+      summary: Evaluate active rules against supplied facts
+      operationId: evaluateRules
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: x-campaign-id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-merchant-key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleEvaluateRequest'
+            example:
+              dry_run: true
+              facts:
+                user_id: "user-123"
+                purchase_amount: 50
+                category: "electronics"
+                current_tier: "gold"
+      responses:
+        '200':
+          description: Rule actions generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuleEvaluateResponse'
+              example:
+                status: "success"
+                dry_run: true
+                actions:
+                  - action: "ADD_POINTS"
+                    value: 100
+                  - action: "SEND_NOTIFICATION"
+                    template: "gold-welcome"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/order/transaction:
+    post:
+      tags: [Rules]
+      summary: Process order transaction through engagement engine
+      operationId: processOrderTransaction
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: X-Campaign-ID
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-merchant-key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerOrder'
+      responses:
+        '201':
+          description: Transaction processed and effects returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EffectResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/transaction/simulate:
+    post:
+      tags: [Rules]
+      summary: Simulate transaction effects for one specific rule
+      operationId: simulateTransaction
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: x-campaign-id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-client-id
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: x-merchant-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-rule-id
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerOrder'
+      responses:
+        '200':
+          description: Simulation result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              example:
+                status: "success"
+                effects:
+                  - actionType: "multiplier"
+                    attributes:
+                      multiplier: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/schemas:
+    post:
+      tags: [Admin]
+      summary: Create tenant schema and associated DB objects
+      operationId: createTenantSchema
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchemaCreateRequest'
+            example:
+              merchant: "tenant_alpha"
+      responses:
+        '200':
+          description: Schema configured
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Schema configured successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/gamification/missions/{userId}:
+    get:
+      tags: [Gamification]
+      summary: Get active user missions and progress
+      operationId: listUserMissions
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Mission progress list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserMissionProgress'
+              example:
+                - id: "d06a82ed-1948-44e4-a481-79980a5f0df3"
+                  userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+                  missionId: "31f6d4b6-2608-4f18-bba9-c428df61a7c9"
+                  currentValue: 2
+                  goal_value: 3
+                  goal_type: "TRANSACTION_COUNT"
+                  progress: 0.6667
+                  status: "ACTIVE"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/gamification/streaks/{userId}:
+    get:
+      tags: [Gamification]
+      summary: Get user streak counters and status
+      operationId: listUserStreaks
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Streak list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserStreak'
+              example:
+                - id: "8ba7471b-d557-4f8f-b88d-f04bc9fb3f26"
+                  userId: "c34a6f4e-18fd-4606-8f3a-ecf2c7b6ef29"
+                  streakId: "e1114d88-74bc-43de-b3ec-2f56e2325bd4"
+                  currentCount: 7
+                  lastActionAt: "2026-02-20T07:00:00Z"
+                  status: "ACTIVE"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Register webhook subscription for tenant events
+      operationId: createWebhookSubscription
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookSubscriptionCreate'
+            example:
+              url: "https://merchant.example.com/webhooks/loyalty"
+              eventTypes: ["points.earned", "points.redeemed", "tier.upgraded"]
+              secretKey: "whsec_prod_abc123"
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    get:
+      tags: [Webhooks]
+      summary: List webhook subscriptions
+      operationId: listWebhookSubscriptions
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+      responses:
+        '200':
+          description: Subscription list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookSubscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /v1/webhooks/{id}:
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook subscription
+      operationId: deleteWebhookSubscription
+      parameters:
+        - $ref: '#/components/parameters/XTenantID'
+        - $ref: '#/components/parameters/XIdempotencyKeyOptional'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: API key used by engagement and integration endpoints.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT with tenant claims (`tenant_id` or `tenantId`) for tenant context extraction.
+
+  parameters:
+    XTenantID:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Mandatory tenant isolation header. Request is rejected with 401 when missing/invalid.
+      example: tenant-alpha
+    XIdempotencyKeyRequired:
+      name: X-Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Required for transactional POST endpoints to prevent duplicate processing.
+      example: earn-tenant-alpha-user-123-order-1001
+    XIdempotencyKeyOptional:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Optional idempotency key for non-transactional operations.
+      example: optional-trace-001
+
+  responses:
+    BadRequest:
+      description: Invalid request payload, headers, or parameters.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: BAD_REQUEST
+            message: Invalid request
+            status: 400
+    Unauthorized:
+      description: Missing/invalid tenant context or auth credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: UNAUTHORIZED
+            message: Missing or invalid tenant context
+            status: 401
+    Conflict:
+      description: State conflict (idempotency in-progress, voucher lock, duplicate resource).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: CONFLICT
+            message: Request already in progress
+            status: 409
+    RateLimited:
+      description: Tenant or key exceeded throttling limits.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: RATE_LIMITED
+            message: Too many requests
+            status: 429
+
   schemas:
-    Fruit:
+    ErrorResponse:
       type: object
+      required: [error, message, status]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        status:
+          type: integer
+        request_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    TenantMetadata:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+          example: tenant-alpha
+        environment:
+          type: string
+          enum: [sandbox, production]
+          example: sandbox
+
+    Money:
+      type: object
+      required: [amount, currency_code]
+      properties:
+        amount:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 100
+        currency_code:
+          type: string
+          example: PTS
+
+    Pagination:
+      type: object
+      required: [page, page_size, total_items, total_pages]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        page_size:
+          type: integer
+          minimum: 1
+          example: 20
+        total_items:
+          type: integer
+          minimum: 0
+          example: 2
+        total_pages:
+          type: integer
+          minimum: 0
+          example: 1
+
+    LedgerRequest:
+      type: object
+      required: [userId, amount, currencyCode]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+        currencyCode:
+          type: string
+          example: PTS
+        metadata:
+          type: object
+          additionalProperties: true
+        expiryDate:
+          type: string
+          format: date-time
+
+    LedgerTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+        userId:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+        currencyCode:
+          type: string
+        transactionType:
+          type: string
+          enum: [EARN, REDEEM, REVERSAL, EXPIRY]
+        metadataJson:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiryDate:
+          type: string
+          format: date-time
+
+    ExchangeRateUpsertRequest:
+      type: object
+      required: [from_currency, to_currency, rate]
+      properties:
+        from_currency:
+          type: string
+        to_currency:
+          type: string
+        rate:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+
+    VoucherCreateRequest:
+      type: object
+      required: [code, currencyCode, amount]
+      properties:
+        code:
+          type: string
+        currencyCode:
+          type: string
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+        expiryDate:
+          type: string
+          format: date-time
+
+    Voucher:
+      type: object
+      properties:
+        code:
+          type: string
+        tenantId:
+          type: string
+        userId:
+          type: string
+          format: uuid
+        currencyCode:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [AVAILABLE, RESERVED, REDEEMED, EXPIRED, VOIDED]
+        reservedUntil:
+          type: string
+          format: date-time
+        expiryDate:
+          type: string
+          format: date-time
+
+    VoucherReservationRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId:
+          type: string
+          format: uuid
+
+    VoucherReservationResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        reserved_until:
+          type: string
+          format: date-time
+
+    VoucherStateResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        state:
+          type: string
+          enum: [AVAILABLE, RESERVED, REDEEMED, EXPIRED, VOIDED]
+
+    RuleEvaluateRequest:
+      type: object
+      required: [facts]
+      properties:
+        dry_run:
+          type: boolean
+          default: false
+        facts:
+          type: object
+          additionalProperties: true
+          description: |
+            Recommended keys: `user_id`, `purchase_amount`, `category`, `current_tier`.
+
+    RuleAction:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          example: ADD_POINTS
+        value:
+          type: number
+          description: Numeric value when action supports one.
+        template:
+          type: string
+          description: Notification template identifier.
+
+    RuleEvaluateResponse:
+      type: object
+      required: [status, dry_run, actions]
+      properties:
+        status:
+          type: string
+          example: success
+        dry_run:
+          type: boolean
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleAction'
+
+    CustomerOrder:
+      type: object
+      required: [orderId, cartItems]
+      properties:
+        orderId:
+          type: string
+        cartItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItem'
+        couponCodes:
+          type: array
+          items:
+            type: string
+
+    CartItem:
+      type: object
+      required: [name, sku, quantity, price, category]
       properties:
         name:
           type: string
-        description:
+        sku:
           type: string
-paths:
-  /fruits:
-    get:
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: array
-                uniqueItems: true
-                items:
-                  $ref: "#/components/schemas/Fruit"
-      summary: List
-      tags:
-      - Fruit Resource
-    delete:
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Fruit"
-        required: true
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: array
-                uniqueItems: true
-                items:
-                  $ref: "#/components/schemas/Fruit"
-      summary: Delete
-      tags:
-      - Fruit Resource
-    post:
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Fruit"
-        required: true
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: array
-                uniqueItems: true
-                items:
-                  $ref: "#/components/schemas/Fruit"
-        "400":
-          description: Bad Request
-      summary: Add
-      tags:
-      - Fruit Resource
-info:
-  title: openapi-swaggerui-quickstart API
-  version: 1.0.0-SNAPSHOT
-servers:
-  - url: https://843c-213-172-149-192.ngrok-free.app
+        quantity:
+          type: integer
+        price:
+          type: number
+          format: double
+        category:
+          type: string
+
+    EffectResult:
+      type: object
+      properties:
+        campaignId:
+          type: string
+        ruleName:
+          type: string
+        effectType:
+          type: string
+        props:
+          type: object
+          additionalProperties: true
+
+    SchemaCreateRequest:
+      type: object
+      required: [merchant]
+      properties:
+        merchant:
+          type: string
+          pattern: '^[a-zA-Z0-9_]+$'
+
+    UserMissionProgress:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+        userId:
+          type: string
+          format: uuid
+        missionId:
+          type: string
+          format: uuid
+        currentValue:
+          type: integer
+          format: int64
+        goal_value:
+          type: integer
+          format: int64
+        goal_type:
+          type: string
+        progress:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        status:
+          type: string
+          enum: [ACTIVE, COMPLETED]
+
+    UserStreak:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+        userId:
+          type: string
+          format: uuid
+        streakId:
+          type: string
+          format: uuid
+        currentCount:
+          type: integer
+        lastActionAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [ACTIVE, AT_RISK]
+
+    WebhookSubscriptionCreate:
+      type: object
+      required: [url, eventTypes, secretKey]
+      properties:
+        url:
+          type: string
+          format: uri
+        eventTypes:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        secretKey:
+          type: string
+
+    WebhookSubscription:
+      allOf:
+        - $ref: '#/components/schemas/WebhookSubscriptionCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            tenantId:
+              type: string
